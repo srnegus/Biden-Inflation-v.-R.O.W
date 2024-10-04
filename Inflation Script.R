@@ -1,4 +1,4 @@
-install.packages(c("tidyverse","plm","readr","lmtest", "sandwich","CausalImpact", "Synth"))
+install.packages(c("tidyverse","plm","readr","lmtest", "sandwich","CausalImpact", "Synth", "modelsummary"))
 
 library(tidyverse)
 library(plm)
@@ -98,5 +98,57 @@ group_id = seq_along(unique_countries)
 # Making a mapping dataframe
 mapping_df = data.frame(country = c("USA", unique_countries),
                         group_id = c(0,group_id))
-
+# Merging
 df = merge(df, mapping_df, by = "country", all.x = TRUE)
+
+# Set group_id missing values (USA) to 0
+df$group_id[is.na(df$group_id)] = 0
+
+# Set group_id as integer
+df$group_id = as.integer(df$group_id)
+
+other_cols = setdiff(names(df),"group_id")
+
+# Reordering Columns
+df = df[, c("group_id", other_cols)]
+
+df = as.data.frame(df)
+
+dataprep.out = dataprep(foo = df,
+                        time.predictors.prior = 2011:2020,
+                        special.predictors = list(
+                          list("inflation_rate",2011:2020, "mean"),
+                          list("inflation_rate",2016:2020, "mean"),
+                          list("inflation_rate",2020:2020, "mean")),
+                        dependent = "inflation_rate",
+                        unit.variable = "group_id",
+                        unit.names.variable = "country",
+                        time.variable = "year", 
+                        treatment.identifier = 0, #treated case
+                        controls.identifier = 1:6,#control cases
+                        time.optimize.ssr = 2011:2020, #time-period to optimize
+                        time.plot = 2011:2024 #entire time period
+                        )
+
+#Running syntheitc control 
+synth.out = synth(dataprep.out)
+
+#Plotting Results
+path.plot(dataprep.res = dataprep.out, synth.res = synth.out, Ylab = "Outcome", Xlab = "Year")
+
+gaps.plot(dataprep.res = dataprep.out, synth.res = synth.out, Ylab = "Outcome", Xlab = "Year")
+
+#Putting gap into dataframe
+gap = as.data.frame(dataprep.out$Y1plot- (dataprep.out$Y0plot %*% synth.out$solution.w))
+gap$index = as.numeric(rownames(gap))
+
+#Subsetting before and after 2020
+pre_df = gap[(gap$index >= 2011) & (gap$index <= 2020),]
+post_df = gap[gap$index >= 2021,]
+
+#Renaming column to gap
+colnames(pre_df)[colnames(pre_df)=="0"] = "gap"
+colnames(post_df)[colnames(post_df)=="0"] = "gap"
+
+print(mean(pre_df$gap))
+print(mean(post_df$gap))

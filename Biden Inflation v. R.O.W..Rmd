@@ -1,0 +1,343 @@
+---
+title: "Biden Inflation v. Rest of World"
+author: "Sean Negus"
+date: "`r Sys.Date()`"
+output: 
+  pdf_document:
+    extra_dependencies: ["booktabs", "caption","float"]
+---
+
+```{r include=FALSE}
+#Libraries
+library(tidyverse)
+library(plm)
+library(readr)
+library(lmtest)
+library(sandwich)
+library(CausalImpact)
+library(Synth)
+library(knitr)
+```
+
+```{r include=FALSE}
+## Data Shaping ##
+
+# Loading in the data
+df_raw = read.csv("imf PCPIPCH.csv")
+
+# Renaming column
+df_raw = df_raw %>% 
+  rename(country = Inflation.rate..average.consumer.prices..Annual.percent.change.)
+
+# Specifying group of 7 countries and treated country
+g7list = c("United States","Canada", "United Kingdom", "Germany", "Italy", "France", "Japan")
+treated_country = "United States"
+control = setdiff(g7list, treated_country)
+
+# Filtering and reshaping data for G7
+df_g7 = df_raw %>%
+  filter(country %in% g7list) %>%
+  pivot_longer(-country, names_to = 'year', values_to = "inflation_rate") %>%
+  mutate(across(c('year'), substr, 2, nchar(year))) %>%
+  mutate(year = as.integer(year), inflation_rate = as.numeric(inflation_rate))
+
+# Getting desired years
+df_g7 = df_g7 %>%
+  filter(year >= 2011 & year < 2025)
+```
+
+```{=tex}
+\begin{center}
+\textbf{Overview}
+\end{center}
+```
+During the Biden administration, the perception of inflation has been a significant economic concern for many Americans. In 2021, inflation began to rise sharply, driven by a number of factors including supply chain disruptions, increased consumer demand as the businesses reopened post-COVID-19, and rising energy prices. This led to a perception that inflation was getting out of hand, causing angst among consumers and influencing political discourse.
+
+In response, the Biden administration implemented different measures, including infrastructure investments and efforts to address supply chain issues. The narrative around inflation evolved, with officials often framing it as a temporary consequence of recovery and global economic conditions. However, as inflation persisted into 2022 and 2023, it became a central issue in political campaigns and public opinion, with many blaming the administration's policies for rising prices.
+
+Public perception was further influenced by factors such as wage growth, which did not keep pace with inflation for many households, leading to increased financial strain. The Federal Reserve's interest rate hikes aimed at curbing inflation added to the narrative.
+
+This begs the question of whether U.S. inflation has been higher during the Biden administration relative to the rest of the world compared to previous years.
+
+```{=tex}
+\begin{center}
+\textbf{Difference-in-Differences}
+\end{center}
+```
+A difference-in-differences model is a statistical technique used in econometrics to estimate the causal effect of a treatment or intervention. It compares the changes in outcomes over time between a treatment group (affected by the intervention) and a control group (not affected).
+
+In this instance, data from the International Monetary Fund, which contained country level inflation rates by year, was used. By selecting the G7 group of advanced economies (United States, Canada, France, Germany, Italy, Japan, and the United Kingdom) and splitting the data into three categories: pre-treatment (pre-2021), post-treatment (2021 and later) and treated post (United States, 2021 later) a model can be fitted, which can be seen below in Table 1.
+
+```{r include=FALSE}
+###### Difference-in-Difference #####
+#####################################
+
+# Data for diff-in-diff
+df = df_g7 %>% 
+  mutate(treated = ifelse(country == treated_country, 1, 0)) %>%
+  mutate(post = ifelse(year >= 2021, 1, 0),
+         treated_post = treated*post)
+
+
+# Fitting OLS model with no FE
+formula = as.formula('inflation_rate ~ treated + post + treated_post')
+model = lm(formula, data = df)
+summary(model)
+```
+
+\break
+
+\break
+
+```{=tex}
+\captionsetup[table]{labelfont=bf, textfont=bf}
+
+\begin{table}
+\centering
+  \caption{OLS with No Fixed Effects}
+  \label{}
+
+\smallskip
+\begin{tabular}{l c l c}
+\toprule
+ & $Inflation\:Rate$\\
+\midrule
+ $Treated$ & 0.4283\\ 
+  & (0.5391) \\ [1ex]
+ $Post$ &  $2.9000^{***}$\\ 
+  &  (0.3812)\\ [1ex]
+ $Treated\:Post$ & 0.3050 \\ 
+  & (0.019) \\  [1ex]
+ $Constant$ & $1.2917^{***}$ \\ 
+  & (1.0085) \\ [1ex]
+\midrule
+   N & \multicolumn{1}{c}{98}\\
+   $R^{2}$ & \multicolumn{1}{c}{0.4301}\\
+   $Adj.\:R^{2}$ & \multicolumn{1}{c}{0.4119}\\
+   F-Stat & \multicolumn{1}{c}{23.65} \\
+\bottomrule
+\footnotesize{Note: $^{***}\, p \approx 0$; $^{**}\, p<0.01$; $^{*}\, p<0.05$; ${.}\, p<0.1$}
+\end{tabular}
+\end{table}
+```
+The baseline diff-in-diff model shown above shows that the inflation rate is roughly 30 basis points higher during the Biden administration relative to the rest of the world that it had been in the prior 10 years.
+
+```{r include=FALSE}
+# Fitting model with FE and clustered SE
+df = pdata.frame(df, index = c("country","year"))
+fe_formula = as.formula("inflation_rate ~ treated + post + treated_post + factor(country)-1")
+fe_model = plm(fe_formula, data = df, model = "within", effect = "individual", index = c("country","year"))
+
+summary(fe_model)
+coeftest(fe_model, vcov = vcovHC(fe_model, type = "HC1", cluster = "group"))
+```
+
+As the data covers the same countries over time it is possibly necessary to control for unobserved factors that are influencing the inflation rate but do change over time. This can be done by combining fixed effect model with the difference-in differences approach, resulting in the regression seen in Table 2.
+
+```{=tex}
+\begin{table}[h]
+\centering
+  \caption{OLS with Fixed Effects}
+
+\smallskip
+\begin{tabular}{l c l c}
+\toprule
+ & $Inflation\:Rate$\\
+\midrule
+ $Post$ &  $2.9000^{***}$\\ 
+  &  (0.36445)\\ [1ex]
+ $Treated\:Post$ & 0.3050 \\ 
+  & (0.96425) \\  [1ex]
+\midrule
+   N & \multicolumn{1}{c}{98}\\
+   $R^{2}$ & \multicolumn{1}{c}{0.46127}\\
+   $Adj.\:R^{2}$ & \multicolumn{1}{c}{0.41285}\\
+   F-Stat & \multicolumn{1}{c}{38.1023} \\
+\bottomrule
+\footnotesize{Note: $^{***}\, p \approx 0$; $^{**}\, p<0.01$; $^{*}\, p<0.05$; ${.}\, p<0.1$}
+\end{tabular}
+\end{table}
+```
+Again, even with a slightly different approach, it is estimated that the inflation rate is roughly 30 basis points higher during the Biden administration relative to the rest of the world that it had been in the prior 10 years.
+
+\newpage
+
+```{=tex}
+\begin{center}
+\textbf{Causal Impact}
+\end{center}
+```
+Another refinement of diff-in-diff modeling is Causal Impact. Which uses the concept of synthetic counter-factual, that is, attempting to combine multiple different 'predictors' into one that closely mimic the response series. It enables the prediction of the response as if there were no intervention.
+
+```{r include=FALSE}
+# Reshaping data to wide
+df_wide = df_g7 %>%
+  pivot_wider(names_from = country, values_from = inflation_rate) %>%
+  arrange(year)
+
+# Moving U.S. to 1st column
+df_wide = df_wide %>%
+  select(year, "United States", everything())
+
+df_wide = df_wide %>%
+  rename(USA = `United States`, UK = `United Kingdom`)
+
+z = zoo(df_wide[-1], order.by = df_wide$year)
+
+# Defining periods 
+pre_period = c(2011,2020)
+post_period = c(2021,2023)
+```
+
+```{r include=FALSE}
+# Causal Impact Analysis
+impact = CausalImpact(z, pre_period, post_period)
+summary(impact)
+```
+
+Table 3 shows the results from the Causal Impact model. It estimated that inflation is 1.4 percentage points higher during the Biden administration than expected based upon the prior years and how other advanced economies are doing.
+
+```{=tex}
+\begin{table}[h]
+\centering
+  \caption{Causal Impact Model}
+
+\smallskip
+\begin{tabular}{l c l c l c}
+\toprule
+ & Average & Cumulative\\
+\midrule
+ Actual &  5.6 & 16.8\\
+ Prediction (s.d.) &   4.2 (0.96) & 12.6 (2.89)\\
+ $95\%$ CI & [1.9, 5.9] & [5.6, 17.8]\\  [1ex]
+ Absolute effect (s.d.) & 1.4 (0.96) & 4.2 (2.89)\\
+ $95\%$ CI &  [-0.34, 3.7] &  [-1.01, 11.2]\\  [1ex]
+ Relative effect (s.d.) &  $41\%\; (144\%)$ & $41\%\;(144\%)$\\
+ $95\%$ CI &  $[-6.3\%, 195\%]$ & $[-6.3\%, 195\%]$\\   [1ex]
+\midrule
+Posterior tail-area probability p: & \multicolumn{1}{c}{0.05136} \\
+Posterior prob. of a causal effect: & \multicolumn{1}{c}{$95\%$} \\
+\bottomrule
+\end{tabular}
+\end{table}
+```
+Figure 1 provides a better visualization of what is happening with inflation based upon the model. As seen in the figure, inflation in the US (black line) shot up in the four years post-2020 relative to other countries and past performances of the inflation rate.
+
+```{=tex}
+\captionsetup[figure]{labelfont=bf, textfont=bf}
+
+\begin{figure}[h]
+\centering
+  \caption{Plotting of Causal Impact Model}
+\end{figure}
+```
+```{r, echo=FALSE, fig.align='center', out.width="75%", out.height='75%'}
+plot(impact)
+```
+
+```{=tex}
+\begin{center}
+\textbf{Synthetic Control}
+\end{center}
+```
+Another synthetic control model using a different method can also be used. This other synthetic control method creates a control of the other advanced economies relative to the U.S. but excludes the time series component.
+
+```{r include=FALSE}
+##### Synthetic Control #####
+#############################
+
+df_g7$country = recode(df_g7$country, "United States" = "USA", "United Kingdom" = "UK")
+df = df_g7
+
+# Unique countries
+unique_countries = unique(df$country)
+
+# Removing USA
+unique_countries = unique_countries[unique_countries != "USA"]
+
+# Assigning integers
+group_id = seq_along(unique_countries)
+
+# Making a mapping dataframe
+mapping_df = data.frame(country = c("USA", unique_countries),
+                        group_id = c(0,group_id))
+# Merging
+df = merge(df, mapping_df, by = "country", all.x = TRUE)
+
+# Set group_id missing values (USA) to 0
+df$group_id[is.na(df$group_id)] = 0
+
+# Set group_id as integer
+df$group_id = as.integer(df$group_id)
+
+other_cols = setdiff(names(df),"group_id")
+
+# Reordering Columns
+df = df[, c("group_id", other_cols)]
+
+df = as.data.frame(df)
+
+dataprep.out = dataprep(foo = df,
+                        time.predictors.prior = 2011:2020,
+                        special.predictors = list(
+                          list("inflation_rate",2011:2020, "mean"),
+                          list("inflation_rate",2016:2020, "mean"),
+                          list("inflation_rate",2020:2020, "mean")),
+                        dependent = "inflation_rate",
+                        unit.variable = "group_id",
+                        unit.names.variable = "country",
+                        time.variable = "year", 
+                        treatment.identifier = 0, #treated case
+                        controls.identifier = 1:6,#control cases
+                        time.optimize.ssr = 2011:2020, #time-period to optimize
+                        time.plot = 2011:2024 #entire time period
+                        )
+```
+
+```{r include=FALSE}
+#Running syntheitc control 
+synth.out = synth(dataprep.out)
+```
+
+The results of the model can be seen in Figures 2. As seen in the figure inflation during the Biden administration jumped post-2020 relative to the other countries and then actually saw a decline after 2022. Over the total Biden administration inflation was 29 basis points higher relative to the rest of the advanced economies compared to 0.2 less during the previous years.
+
+```{=tex}
+\captionsetup[figure]{labelfont=bf, textfont=bf}
+
+\begin{figure}[h]
+\centering
+  \caption{Plotting of Synthetic Control Model}
+\end{figure}
+```
+```{r echo=FALSE, figures-side, out.width="50%", out.height='50%'}
+#Plotting Results
+path.plot(dataprep.res = dataprep.out, synth.res = synth.out, Ylab = "Outcome", Xlab = "Year")
+
+gaps.plot(dataprep.res = dataprep.out, synth.res = synth.out, Ylab = "Outcome", Xlab = "Year")
+```
+
+```{r include=FALSE}
+#Putting gap into dataframe
+gap = as.data.frame(dataprep.out$Y1plot- (dataprep.out$Y0plot %*% synth.out$solution.w))
+gap$index = as.numeric(rownames(gap))
+
+#Subsetting before and after 2020
+pre_df = gap[(gap$index >= 2011) & (gap$index <= 2020),]
+post_df = gap[gap$index >= 2021,]
+
+#Renaming column to gap
+colnames(pre_df)[colnames(pre_df)=="0"] = "gap"
+colnames(post_df)[colnames(post_df)=="0"] = "gap"
+
+print(mean(pre_df$gap))
+print(mean(post_df$gap))
+```
+
+```{=tex}
+\begin{center}
+\textbf{Conclusion}
+\end{center}
+```
+Under two different methods, difference in differences and synthetic control, it is similarly estimated that inflation was about 30 basis points higher during the Biden years compared to the other G7 economies.
+
+It should also be noted that it is possible inflation in other countries could be attributed to actions that take place in the United States so the true difference could be higher.
